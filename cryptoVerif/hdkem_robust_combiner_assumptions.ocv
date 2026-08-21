@@ -1,0 +1,176 @@
+(* ============================================================
+ * HDKEM robust split-key combiner: primitive assumptions
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * State the three PRF-style idealization assumptions needed by
+ * the HDKEM robust-OR combiner theorem.
+ *
+ * The concrete HDKEM combiner is
+ *
+ *     K = Combine(k1,k2,k3,ctx).
+ *
+ * The robust theorem says that if AT LEAST ONE input remains
+ * computationally hidden/pseudorandom, then the final K can be
+ * replaced by an independent random session key, up to the
+ * corresponding primitive advantage plus the split-key-PRF
+ * advantage.
+ *
+ * This file deliberately separates three cases:
+ *
+ *   robust_k1 : ML-KEM contribution k1 survives
+ *   robust_k2 : DH/NIKE contribution k2 survives
+ *   robust_k3 : source/QKD contribution k3 survives
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * These equivalences STATE the split-key PRF / robust-combiner
+ * assumptions used by the protocol proof. They are not a proof
+ * from the implementation of the concrete PRF.
+ *
+ * The lower-level robust-combiner theorem should be proved in a
+ * primitive proof framework (e.g., EasyCrypt) or justified by
+ * the paper's analytical reduction.
+ * ============================================================ *)
+
+param NComb.
+
+type kemShared [large,fixed].
+type dhShared [large,fixed].
+type sourceKey [large,fixed].
+type context [bounded].
+type sessionKey [large,fixed].
+
+fun Combine(kemShared,dhShared,sourceKey,context):sessionKey.
+
+proba P_COMB_K1.
+proba P_COMB_K2.
+proba P_COMB_K3.
+
+(* ------------------------------------------------------------
+ * k1 survives: k1 is sampled secretly inside the primitive game.
+ * The adversary controls k2,k3,ctx.
+ * ------------------------------------------------------------ *)
+
+equiv(
+    robust_k1(Combine)
+)
+    k1 <-R kemShared;
+
+    foreach i1 <= NComb do
+    OComb1(
+        k2:dhShared,
+        k3:sourceKey,
+        c:context
+    ) :=
+        return(
+            Combine(k1,k2,k3,c)
+        )
+
+<=(
+    P_COMB_K1(
+        time,
+        NComb
+    )
+)=>
+
+    k1 <-R kemShared;
+
+    foreach i1 <= NComb do
+    OComb1(
+        k2:dhShared,
+        k3:sourceKey,
+        c:context
+    ) :=
+        Kideal <-R sessionKey;
+        return(
+            Kideal
+        ).
+
+
+(* ------------------------------------------------------------
+ * k2 survives.
+ * ------------------------------------------------------------ *)
+
+equiv(
+    robust_k2(Combine)
+)
+    k2 <-R dhShared;
+
+    foreach i2 <= NComb do
+    OComb2(
+        k1:kemShared,
+        k3:sourceKey,
+        c:context
+    ) :=
+        return(
+            Combine(k1,k2,k3,c)
+        )
+
+<=(
+    P_COMB_K2(
+        time,
+        NComb
+    )
+)=>
+
+    k2 <-R dhShared;
+
+    foreach i2 <= NComb do
+    OComb2(
+        k1:kemShared,
+        k3:sourceKey,
+        c:context
+    ) :=
+        Kideal <-R sessionKey;
+        return(
+            Kideal
+        ).
+
+
+(* ------------------------------------------------------------
+ * k3 survives.
+ * This is the case used by HDKEM eCK cases C2, C3, and C4.
+ * ------------------------------------------------------------ *)
+
+equiv(
+    robust_k3(Combine)
+)
+    k3 <-R sourceKey;
+
+    foreach i3 <= NComb do
+    OComb3(
+        k1:kemShared,
+        k2:dhShared,
+        c:context
+    ) :=
+        return(
+            Combine(k1,k2,k3,c)
+        )
+
+<=(
+    P_COMB_K3(
+        time,
+        NComb
+    )
+)=>
+
+    k3 <-R sourceKey;
+
+    foreach i3 <= NComb do
+    OComb3(
+        k1:kemShared,
+        k2:dhShared,
+        c:context
+    ) :=
+        Kideal <-R sessionKey;
+        return(
+            Kideal
+        ).
+
+
+(* Standalone parser harness: deliberately does not call Combine. *)
+process
+    Ostart() :=
+        return().

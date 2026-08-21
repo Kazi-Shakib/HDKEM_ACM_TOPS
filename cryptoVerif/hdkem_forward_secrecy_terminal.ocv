@@ -1,0 +1,114 @@
+(* ============================================================
+ * HDKEM forward secrecy: terminal post-compromise game
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * Represent the terminal game reached after the tested session's
+ * KEM/DH/source contribution has been idealized and the robust
+ * combiner has replaced the completed session key by an
+ * independent fresh Ktest.
+ *
+ * After the tested session has completed, the adversary learns
+ * the long-term authentication secret.
+ *
+ * CryptoVerif checks that Ktest remains secret despite this
+ * post-session compromise.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This file proves only the FINAL ideal-game secrecy statement.
+ *
+ * It does not itself prove the computational hops needed to reach
+ * this game. Those are supplied separately by the KEM, DH/source,
+ * and robust-combiner reductions.
+ *
+ * The crucial forward-secrecy condition is temporal:
+ *
+ *   session established
+ *       before
+ *   long-term corruption
+ *
+ * This terminal model represents the post-reduction state in
+ * which Ktest is already independent of the compromised
+ * long-term secret.
+ * ============================================================ *)
+
+
+(* ============================================================
+ * Types
+ * ============================================================ *)
+
+type longterm [large,fixed].
+type sessionKey [large,fixed].
+type publicView [bounded].
+
+
+(* ============================================================
+ * Secrecy query
+ * ============================================================ *)
+
+query secret Ktest.
+
+
+(* ============================================================
+ * Completed-session interface
+ *
+ * This oracle represents continued reference to the completed
+ * test session. Ktest is intentionally never returned.
+ * ============================================================ *)
+
+let processUseSession() =
+
+    OUseSession() :=
+
+        return().
+
+
+(* ============================================================
+ * Post-session corruption interface
+ *
+ * The adversary learns the long-term authentication secret.
+ *
+ * Ktest is not returned and is independent in this terminal
+ * ideal game.
+ * ============================================================ *)
+
+let processCorruptAfter(
+    skLT:longterm
+) =
+
+    OCorruptAfter() :=
+
+        return(
+            skLT
+        ).
+
+
+(* ============================================================
+ * Main terminal game
+ * ============================================================ *)
+
+process
+
+    Ostart() :=
+
+        skLT <-R longterm;
+
+        Ktest <-R sessionKey;
+
+        view <-R publicView;
+
+        return(
+            view
+        );
+
+        (
+            run processUseSession()
+
+          |
+
+            run processCorruptAfter(
+                skLT
+            )
+        ).

@@ -1,0 +1,94 @@
+(* ============================================================
+ * HDKEM strong local deniability: real/simulated-view assumption
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * Express deniability in the correct form: indistinguishability
+ * of a real local transcript view and a simulated local view.
+ *
+ * A correspondence query cannot establish deniability.
+ *
+ * This file therefore states the ring-authenticator simulation
+ * equivalence consumed by the HDKEM deniability reduction.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * The quantitative ring-signature (mu,delta) theorem is a
+ * primitive-level obligation. This file does not derive that
+ * theorem from FalconRS/GANDALF internals; it provides the
+ * protocol-level real/simulated-view assumption.
+ *
+ * SRC mode is the deniable mode in the HDKEM proof. Mode is
+ * bound into the transcript by the full protocol model.
+ * ============================================================ *)
+
+param NSim.
+
+type transcript [bounded].
+type ringSecret [large,fixed].
+type ringPublic [bounded].
+type ringSignature [bounded].
+type simCoins [large,fixed].
+
+fun RingPk(ringSecret):ringPublic.
+fun RingSign(transcript,ringSecret):ringSignature.
+fun RingSim(transcript,ringPublic,simCoins):ringSignature.
+
+proba P_DENIABILITY.
+
+equiv(
+    ring_local_deniability(RingSign)
+)
+    sk <-R ringSecret;
+
+    (
+        OPk() :=
+            return(
+                RingPk(sk)
+            )
+
+      | foreach i <= NSim do
+        OView(
+            tr:transcript
+        ) :=
+            return(
+                RingSign(
+                    tr,
+                    sk
+                )
+            )
+    )
+
+<=(
+    P_DENIABILITY(
+        time,
+        NSim
+    )
+)=>
+
+    sk <-R ringSecret;
+
+    (
+        OPk() :=
+            return(
+                RingPk(sk)
+            )
+
+      | foreach i <= NSim do
+        OView(
+            tr:transcript
+        ) :=
+            rSim <-R simCoins;
+            return(
+                RingSim(
+                    tr,
+                    RingPk(sk),
+                    rSim
+                )
+            )
+    ).
+
+process
+    Ostart() :=
+        return().

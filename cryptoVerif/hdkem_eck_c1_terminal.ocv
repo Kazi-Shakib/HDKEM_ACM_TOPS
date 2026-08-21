@@ -1,0 +1,137 @@
+(* ============================================================
+ * HDKEM eCK case C1: terminal ideal game
+ * CryptoVerif ORACLE front-end
+ *
+ * EXPOSURE PATTERN
+ * ----------------
+ * Both long-term ring keys are revealed; neither ephemeral state
+ * is revealed.
+ *
+ * SURVIVING CONTRIBUTIONS
+ * -----------------------
+ * k1, k2, and k3 survive.
+ *
+ * PURPOSE
+ * -------
+ * This file is the terminal secrecy game for eCK case C1.
+ *
+ * It represents the game reached after:
+ *
+ *   1. authenticating the tested transcript;
+ *   2. idealizing the surviving KEM/DH/source contributions as
+ *      required by the reduction;
+ *   3. applying the robust combiner hop so that the tested
+ *      session key is replaced by an independent fresh Ktest.
+ *
+ * The C1 exposure oracle then reveals both long-term
+ * authentication secrets.
+ *
+ * CryptoVerif checks that Ktest remains secret.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This file proves only the final ideal-game secrecy statement
+ * for C1.
+ *
+ * The computational reductions needed to reach this game are
+ * represented separately by:
+ *
+ *   hdkem_mlkem_indcca2.ocv
+ *   hdkem_dh_prfodh_assumption.ocv
+ *   hdkem_source_qkd.ocv
+ *   hdkem_robust_combiner_assumptions.ocv
+ *
+ * together with the authentication/composition proof.
+ * ============================================================ *)
+
+
+(* ============================================================
+ * Types
+ * ============================================================ *)
+
+type longterm [large,fixed].
+type ephemeral [large,fixed].
+type sessionKey [large,fixed].
+type publicView [bounded].
+
+
+(* ============================================================
+ * Secrecy query
+ * ============================================================ *)
+
+query secret Ktest.
+
+
+(* ============================================================
+ * Test-session interface
+ *
+ * Ktest is intentionally never returned.
+ * ============================================================ *)
+
+let processTest() =
+
+    OTest() :=
+
+        return().
+
+
+(* ============================================================
+ * C1 exposure interface
+ *
+ * Reveal:
+ *
+ *   - A's long-term key ltA;
+ *   - B's long-term key ltB.
+ *
+ * Keep secret:
+ *
+ *   - A's ephemeral state ephA;
+ *   - B's ephemeral state ephB;
+ *   - Ktest.
+ * ============================================================ *)
+
+let processExposure(
+    ltA:longterm,
+    ltB:longterm
+) =
+
+    OExposure() :=
+
+        return(
+            ltA,
+            ltB
+        ).
+
+
+(* ============================================================
+ * Main terminal game
+ * ============================================================ *)
+
+process
+
+    Ostart() :=
+
+        ltA <-R longterm;
+        ltB <-R longterm;
+
+        ephA <-R ephemeral;
+        ephB <-R ephemeral;
+
+        Ktest <-R sessionKey;
+
+        view <-R publicView;
+
+        return(
+            view
+        );
+
+        (
+            run processTest()
+
+          |
+
+            run processExposure(
+                ltA,
+                ltB
+            )
+        ).

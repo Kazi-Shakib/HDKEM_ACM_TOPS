@@ -1,0 +1,69 @@
+(* ============================================================
+ * HDKEM eCK case C4: terminal ideal game
+ * CryptoVerif ORACLE front-end
+ *
+ * EXPOSURE PATTERN
+ * ----------------
+ * both ephemeral states revealed; neither long-term ring key revealed.
+ *
+ * SURVIVING CONTRIBUTION(S)
+ * -------------------------
+ * only k3 survives.
+ *
+ * PURPOSE
+ * -------
+ * This is the TERMINAL GAME reached after:
+ *
+ *   1. authenticating the test transcript;
+ *   2. applying the surviving primitive idealization(s);
+ *   3. applying the robust split-key combiner hop.
+ *
+ * At this point the tested session key is an independent fresh
+ * restriction, so CryptoVerif checks that all case-specific
+ * exposure material may be returned without revealing Ktest.
+ *
+ * IMPORTANT
+ * ---------
+ * This file is NOT by itself the whole eCK reduction.
+ * The preceding game hops are represented by:
+ *
+ *   hdkem_mlkem_indcca2.ocv
+ *   hdkem_dh_prfodh_assumption.ocv
+ *   hdkem_source_qkd.ocv
+ *   hdkem_robust_combiner_assumptions.ocv
+ *
+ * The full theorem is the composition of those hops with this
+ * terminal secrecy game.
+ * ============================================================ *)
+
+type longterm [large,fixed].
+type ephemeral [large,fixed].
+type sessionKey [large,fixed].
+type publicView [bounded].
+
+query secret Ktest.
+
+process
+    Ostart() :=
+        ltA <-R longterm;
+        ltB <-R longterm;
+        ephA <-R ephemeral;
+        ephB <-R ephemeral;
+        Ktest <-R sessionKey;
+        view <-R publicView;
+
+        return(
+            view
+        );
+
+        (
+            OTest() :=
+                return()
+
+          |
+
+            OExposure() :=
+                return(
+                    ephA,ephB
+                )
+        ).

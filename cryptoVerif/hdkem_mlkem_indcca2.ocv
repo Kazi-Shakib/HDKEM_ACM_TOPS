@@ -1,0 +1,433 @@
+(* ============================================================
+ * HDKEM ML-KEM-768 IND-CCA2 primitive abstraction
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * This file states the real/ideal IND-CCA2 KEM assumption used
+ * by the HDKEM protocol proof.
+ *
+ * It is intentionally a PRIMITIVE-ASSUMPTION FILE ONLY.
+ *
+ * It contains:
+ *   - the abstract ML-KEM interface;
+ *   - the KEM correctness equation;
+ *   - the IND-CCA2 real/ideal equivalence;
+ *   - the ideal-world consistency table.
+ *
+ * It deliberately contains NO standalone protocol process.
+ *
+ * The HDKEM protocol model should import/copy this equivalence
+ * and apply it at the specific point where the ML-KEM contribution
+ * is replaced by an ideal fresh key.
+ *
+ *
+ * REAL WORLD
+ * ----------
+ *   - one honest KEM key pair is generated;
+ *   - OGetPk exposes the honest public key;
+ *   - OEnc performs a fresh encapsulation on every call;
+ *   - ODec accepts an arbitrary adversary-supplied ciphertext.
+ *
+ *
+ * IDEAL WORLD
+ * -----------
+ *   - encapsulation under the honest public key preserves the
+ *     real ciphertext but replaces the returned shared key by an
+ *     independent fresh ideal key;
+ *   - table E records the pair (ideal key, ciphertext);
+ *   - later decapsulation of such a ciphertext returns the same
+ *     recorded ideal key;
+ *   - all other ciphertexts are decapsulated normally;
+ *   - encapsulation under a non-honest public key remains real.
+ *
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This file STATES an IND-CCA2 KEM primitive assumption.
+ *
+ * It does NOT prove from the internal specification of ML-KEM
+ * that ML-KEM-768 satisfies IND-CCA2.
+ *
+ * In the HDKEM proof, ML-KEM-768 is the concrete instantiation
+ * of this abstract KEM interface, and its primitive-level
+ * IND-CCA2 justification is external.
+ *
+ *
+ * MODELING NOTES
+ * --------------
+ * 1. Encapsulation randomness is sampled INSIDE OEnc.
+ *    Each oracle invocation therefore uses fresh coins.
+ *
+ * 2. ODec takes the ciphertext explicitly as an oracle argument.
+ *    The adversary may submit modified, replayed, cross-session,
+ *    or unrelated ciphertexts.
+ *
+ * 3. kemDec is modeled as total, matching ML-KEM implicit
+ *    rejection.
+ *
+ * 4. The model does not assert the invalid correspondence
+ *
+ *       Decapsulated(ct,k) ==> Encapsulated(ct,k)
+ *
+ *    for arbitrary ciphertexts.
+ *
+ * 5. Encapsulation returns one value, kemOut(ct,k), because the
+ *    oracle-equivalence front-end expects a single return term.
+ *
+ * 6. There is intentionally no top-level process in this file.
+ *    This avoids repeatedly exposing new real-game instances that
+ *    can cause automatic proof search to reapply the equivalence
+ *    indefinitely.
+ * ============================================================ *)
+
+
+(* ============================================================
+ * Query bounds
+ * ============================================================ *)
+
+param NEnc.
+param NDec.
+
+
+(* ============================================================
+ * KEM types
+ * ============================================================ *)
+
+type kemKeyseed [large,fixed].
+type kemPkey [bounded].
+type kemSkey [bounded].
+
+type kemCoins [large,fixed].
+type kemCiphertext [bounded].
+type kemSharedKey [large,fixed].
+
+type kemOutput [bounded].
+
+
+(* ============================================================
+ * Abstract ML-KEM interface
+ * ============================================================ *)
+
+fun kemPk(
+    kemKeyseed
+):kemPkey.
+
+fun kemSk(
+    kemKeyseed
+):kemSkey.
+
+fun kemCt(
+    kemPkey,
+    kemCoins
+):kemCiphertext.
+
+fun kemSS(
+    kemPkey,
+    kemCoins
+):kemSharedKey.
+
+fun kemDec(
+    kemSkey,
+    kemCiphertext
+):kemSharedKey.
+
+
+(* ============================================================
+ * Encapsulation-output constructor
+ *
+ * One equivalence-oracle return term carries both the ciphertext
+ * and shared key.
+ * ============================================================ *)
+
+fun kemOut(
+    kemCiphertext,
+    kemSharedKey
+):kemOutput [data].
+
+
+(* ============================================================
+ * KEM correctness
+ *
+ * For a key pair generated from the same seed r and an honest
+ * encapsulation using coins e:
+ *
+ *   Decaps(sk(r), Encaps_ct(pk(r),e))
+ *     =
+ *   Encaps_ss(pk(r),e).
+ *
+ * This equation expresses correctness only.
+ * It is not an IND-CCA2 assumption by itself.
+ * ============================================================ *)
+
+equation forall r:kemKeyseed, e:kemCoins;
+
+    kemDec(
+        kemSk(r),
+        kemCt(
+            kemPk(r),
+            e
+        )
+    )
+
+    =
+
+    kemSS(
+        kemPk(r),
+        e
+    ).
+
+
+(* ============================================================
+ * IND-CCA2 advantage
+ *
+ * P_KEM_IND_CCA2 represents the distinguishing advantage for
+ * the abstract KEM primitive.
+ *
+ * The concrete ML-KEM-768 reduction/bound is external to this
+ * protocol-level CryptoVerif model.
+ * ============================================================ *)
+
+proba P_KEM_IND_CCA2.
+
+
+(* ============================================================
+ * Ideal-world consistency table
+ *
+ * E(kIdeal,ct) records that:
+ *
+ *   - ct was produced by an encapsulation under the honest
+ *     public key; and
+ *   - the real shared key associated with ct was replaced by the
+ *     fresh independent key kIdeal.
+ *
+ * If ct is later submitted to ODec, the ideal game returns the
+ * same recorded kIdeal.
+ * ============================================================ *)
+
+table E(
+    kemSharedKey,
+    kemCiphertext
+).
+
+
+(* ============================================================
+ * ML-KEM IND-CCA2 real/ideal equivalence
+ *
+ * REAL SIDE
+ * ---------
+ *
+ * OGetPk()
+ *     returns the honest public key.
+ *
+ * OEnc(pkIn)
+ *     samples fresh encapsulation coins for each invocation and
+ *     returns the real ciphertext/shared-key pair.
+ *
+ * ODec(ctIn)
+ *     accepts any attacker-controlled ciphertext and performs
+ *     ordinary decapsulation under the honest secret key.
+ *
+ *
+ * IDEAL SIDE
+ * ----------
+ *
+ * OGetPk()
+ *     is unchanged.
+ *
+ * OEnc(pkIn)
+ *     if pkIn is the honest public key:
+ *       - computes the real ciphertext;
+ *       - samples a fresh independent ideal shared key;
+ *       - stores (ideal key,ciphertext) in E;
+ *       - returns the ciphertext and ideal key.
+ *
+ *     otherwise:
+ *       - returns the ordinary real encapsulation result.
+ *
+ * ODec(ctIn)
+ *     if ctIn occurs in E:
+ *       - returns the matching stored ideal key.
+ *
+ *     otherwise:
+ *       - performs ordinary decapsulation.
+ *
+ * ============================================================ *)
+
+equiv(
+    kem_ind_cca2(kemCt)
+)
+
+    rk <-R kemKeyseed;
+
+    (
+        OGetPk() :=
+
+            return(
+                kemPk(rk)
+            )
+
+
+      | foreach iD <= NDec do
+
+        ODec(
+            ctIn:kemCiphertext
+        ) :=
+
+            return(
+                kemDec(
+                    kemSk(rk),
+                    ctIn
+                )
+            )
+
+
+      | foreach iE <= NEnc do
+
+        OEnc(
+            pkIn:kemPkey
+        ) :=
+
+            e <-R kemCoins;
+
+            ctReal <- kemCt(
+                pkIn,
+                e
+            );
+
+            kReal <- kemSS(
+                pkIn,
+                e
+            );
+
+            return(
+                kemOut(
+                    ctReal,
+                    kReal
+                )
+            )
+    )
+
+<=(
+    P_KEM_IND_CCA2(
+        time,
+        NEnc,
+        NDec
+    )
+)=>
+
+    rk <-R kemKeyseed;
+
+    (
+        OGetPk() :=
+
+            return(
+                kemPk(rk)
+            )
+
+
+      | foreach iD <= NDec do
+
+        ODec(
+            ctIn:kemCiphertext
+        ) :=
+
+            get E(
+                kStored,
+                ctStored
+            )
+            suchthat
+                ctIn = ctStored
+            in
+
+                return(
+                    kStored
+                )
+
+            else
+
+                return(
+                    kemDec(
+                        kemSk(rk),
+                        ctIn
+                    )
+                )
+
+
+      | foreach iE <= NEnc do
+
+        OEnc(
+            pkIn:kemPkey
+        ) :=
+
+            e <-R kemCoins;
+
+            if pkIn = kemPk(rk) then
+
+                kIdeal <-R kemSharedKey;
+
+                ctIdeal <- kemCt(
+                    pkIn,
+                    e
+                );
+
+                insert E(
+                    kIdeal,
+                    ctIdeal
+                );
+
+                return(
+                    kemOut(
+                        ctIdeal,
+                        kIdeal
+                    )
+                )
+
+            else
+
+                ctOther <- kemCt(
+                    pkIn,
+                    e
+                );
+
+                kOther <- kemSS(
+                    pkIn,
+                    e
+                );
+
+                return(
+                    kemOut(
+                        ctOther,
+                        kOther
+                    )
+                )
+    ).
+
+(* ============================================================
+ * Minimal inert top-level process
+ *
+ * CryptoVerif's oracle front-end requires a top-level process in
+ * a standalone .ocv file.
+ *
+ * This process intentionally contains NO KEM operation and hence
+ * does not match the left-hand side of kem_ind_cca2(kemCt).
+ *
+ * Its sole purpose is to make this primitive-assumption file
+ * syntactically complete when run by itself.
+ * ============================================================ *)
+
+process
+
+    Ostart() :=
+
+        return().
+
+(* ============================================================
+ * END
+ *
+ * The IND-CCA2 cryptographic content of this file is the
+ * kem_ind_cca2(kemCt) equivalence above.
+ *
+ * hdkem_full.ocv should contain the actual HDKEM protocol process
+ * and apply that equivalence in a controlled proof step.
+ * ============================================================ *)

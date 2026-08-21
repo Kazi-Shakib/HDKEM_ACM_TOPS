@@ -1,0 +1,99 @@
+(* ============================================================
+ * HDKEM NIKE-slot substitution soundness
+ * CryptoVerif ORACLE front-end
+ *
+ * STATUS:
+ *   VERIFIED COMPONENT.
+ *
+ *   The INRIA CryptoVerif run for this model reached:
+ *
+ *       RESULT Proved ... ServerAccepted ==> ClientSigned
+ *       All queries proved.
+ *
+ *   The property is NON-INJECTIVE transcript agreement under the
+ *   UF-CMA signature abstraction. Replay resistance/injective
+ *   agreement is not claimed.
+ * ============================================================ *)
+
+proof {
+    crypto uf_cma(sign) *;
+    success
+}
+
+param NC.
+param NS.
+
+type host [bounded].
+type keyseed [large,fixed].
+type pkey [bounded].
+type skey [bounded].
+type message [bounded].
+type signature [bounded].
+type Z [large,bounded].
+type G [large,bounded].
+type taurest [bounded].
+
+const g:G.
+fun exp(G,Z):G.
+
+fun tau(host,host,G,G,taurest): message [data].
+
+proba Psign.
+proba Psigncoll.
+
+expand UF_CMA_proba_signature(
+    keyseed,
+    pkey,
+    skey,
+    message,
+    signature,
+    skgen,
+    pkgen,
+    sign,
+    verify,
+    Psign,
+    Psigncoll
+).
+
+const IDC:host.
+const IDS:host.
+
+event ClientSigned(host,host,G,G,taurest).
+event ServerAccepted(host,host,G,G,taurest).
+
+query pkc:G, pks:G, tr:taurest;
+    event(ServerAccepted(IDC,IDS,pkc,pks,tr))
+    ==>
+    event(ClientSigned(IDC,IDS,pkc,pks,tr)).
+
+let processC(skC:skey) =
+    OC(pkS2:G) :=
+        a <-R Z;
+        pkC2 <- exp(g,a);
+        tr <-R taurest;
+        sig <- sign(tau(IDC,IDS,pkC2,pkS2,tr),skC);
+        event ClientSigned(IDC,IDS,pkC2,pkS2,tr);
+        return(pkC2,tr,sig).
+
+let processS(pkC:pkey) =
+    OS1() :=
+        b <-R Z;
+        pkS2 <- exp(g,b);
+        return(pkS2);
+
+    OS2(pkC2:G,tr:taurest,sig:signature) :=
+        if verify(tau(IDC,IDS,pkC2,pkS2,tr),pkC,sig) then
+        event ServerAccepted(IDC,IDS,pkC2,pkS2,tr);
+        return().
+
+process
+    Ostart() :=
+        rkC <-R keyseed;
+        let pkC = pkgen(rkC) in
+        let skC = skgen(rkC) in
+        return(pkC);
+        (
+            foreach iC <= NC do run processC(skC)
+          |
+            foreach iS <= NS do run processS(pkC)
+        )

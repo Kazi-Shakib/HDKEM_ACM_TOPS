@@ -1,0 +1,438 @@
+(* ============================================================
+ * HDKEM protocol composition: authenticated matching construction
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * Compose the protocol-facing HDKEM ingredients:
+ *
+ *   - ML-KEM-shaped functional KEM interface;
+ *   - ephemeral DH/NIKE functional interface;
+ *   - ideal source/QKD value;
+ *   - client UF-CMA transcript authentication;
+ *   - three-input deterministic combiner;
+ *   - ideal authenticated Finished/key-confirmation functionality.
+ *
+ * QUERIES
+ * -------
+ * This file targets the following NON-INJECTIVE correspondences:
+ *
+ *   1. ServerAccepted ==> ClientSigned
+ *
+ *      A server acceptance refers to a transcript authenticated by
+ *      an honest client under the UF-CMA signature abstraction.
+ *
+ *   2. ServerAccepted ==> ClientConstructed
+ *
+ *      A server acceptance refers to an honest client construction
+ *      with the same transcript components, session key, and
+ *      Finished value.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This is a protocol-composition/agreement model.
+ *
+ * It does NOT mechanize:
+ *
+ *   - eCK key indistinguishability;
+ *   - forward secrecy as a real-or-random game;
+ *   - strong local deniability / the ring-signature (mu,delta)
+ *     simulator game;
+ *   - computational Gap-DH/CDH pseudorandomness;
+ *   - robust-OR split-key-PRF security;
+ *   - primitive-level ML-KEM-768 IND-CCA2 security;
+ *   - physical/finite-key QKD security.
+ *
+ * The KEM correctness equation and DH equations below are
+ * functional interfaces. The ideal Finished table represents the
+ * post-authentication ideal world used in the separately verified
+ * combiner/Finished component.
+ *
+ * Do NOT describe this file as a complete mechanization of HDKEM
+ * eCK or deniability security.
+ * ============================================================ *)
+
+proof {
+    crypto uf_cma(sign) *;
+    success
+}
+
+param NC.
+param NS.
+
+type host       [bounded].
+type mode       [bounded].
+type sourceid   [large,fixed].
+type context    [bounded].
+type transcript [bounded].
+
+const IDC:host.
+const IDS:host.
+const MODE_SRC:mode.
+
+(* ---------------- Signature abstraction ---------------- *)
+
+type sigKeyseed [large,fixed].
+type sigPkey    [bounded].
+type sigSkey    [bounded].
+type signature  [bounded].
+
+proba Psign.
+proba Psigncoll.
+
+expand UF_CMA_proba_signature(
+    sigKeyseed,
+    sigPkey,
+    sigSkey,
+    transcript,
+    signature,
+    sigSkgen,
+    sigPkgen,
+    sign,
+    verify,
+    Psign,
+    Psigncoll
+).
+
+(* ---------------- ML-KEM functional interface ---------------- *)
+
+type kemKeyseed    [large,fixed].
+type kemPkey       [bounded].
+type kemSkey       [bounded].
+type kemCiphertext [bounded].
+type kemShared     [large,fixed].
+type kemCoins      [large,fixed].
+
+fun kemPk(kemKeyseed):kemPkey.
+fun kemSk(kemKeyseed):kemSkey.
+fun kemCt(kemPkey,kemCoins):kemCiphertext.
+fun kemSS(kemPkey,kemCoins):kemShared.
+fun kemDec(kemSkey,kemCiphertext):kemShared.
+
+equation forall r:kemKeyseed,e:kemCoins;
+    kemDec(kemSk(r),kemCt(kemPk(r),e))
+    =
+    kemSS(kemPk(r),e).
+
+(* ---------------- DH / NIKE functional interface ---------------- *)
+
+type Z [large,bounded].
+type G [large,bounded].
+type dhShared [large,fixed].
+
+const g:G.
+fun exp(G,Z):G.
+fun mult(Z,Z):Z.
+
+equation forall x:G,a:Z,b:Z;
+    exp(exp(x,a),b)=exp(x,mult(a,b)).
+
+equation builtin commut(mult).
+
+fun dhK(G):dhShared.
+
+(* ---------------- Source / QKD ideal resource ---------------- *)
+
+type sourceKey [large,fixed].
+
+(* ---------------- Combiner / key confirmation ---------------- *)
+
+type sessionKey  [large,fixed].
+type finishedTag [large,fixed].
+
+fun Combine(
+    kemShared,
+    dhShared,
+    sourceKey,
+    context
+):sessionKey.
+
+(* Private ideal-world authentication table for Finished.
+ * Only an honest client inserts entries.
+ *)
+table FinishedIssued(
+    transcript,
+    sessionKey,
+    finishedTag
+).
+
+(* ---------------- Authenticated transcript ---------------- *)
+
+fun Tau(
+    host,
+    host,
+    mode,
+    kemCiphertext,
+    G,
+    G,
+    sourceid,
+    context
+):transcript [data].
+
+(* ---------------- Events ---------------- *)
+
+event ClientSigned(
+    kemCiphertext,
+    G,
+    G,
+    sourceid,
+    context
+).
+
+event ClientConstructed(
+    kemCiphertext,
+    G,
+    G,
+    sourceid,
+    context,
+    sessionKey,
+    finishedTag
+).
+
+event ServerAccepted(
+    kemCiphertext,
+    G,
+    G,
+    sourceid,
+    context,
+    sessionKey,
+    finishedTag
+).
+
+(* ---------------- Queries ---------------- *)
+
+query ct:kemCiphertext,pc:G,ps:G,kid:sourceid,c:context,
+      K:sessionKey,f:finishedTag;
+    event(ServerAccepted(ct,pc,ps,kid,c,K,f))
+    ==>
+    event(ClientSigned(ct,pc,ps,kid,c)).
+
+query ct:kemCiphertext,pc:G,ps:G,kid:sourceid,c:context,
+      K:sessionKey,f:finishedTag;
+    event(ServerAccepted(ct,pc,ps,kid,c,K,f))
+    ==>
+    event(ClientConstructed(ct,pc,ps,kid,c,K,f)).
+
+(* ---------------- Client ---------------- *)
+
+let processC(
+    sigSkC:sigSkey,
+    pkKemS:kemPkey,
+    kid3:sourceid,
+    k3:sourceKey
+) =
+    OC(pkS2:G) :=
+        e <-R kemCoins;
+        let ct = kemCt(pkKemS,e) in
+        let k1 = kemSS(pkKemS,e) in
+
+        a <-R Z;
+        let pkC2 = exp(g,a) in
+        let zC = exp(pkS2,a) in
+        let k2 = dhK(zC) in
+
+        ctx <-R context;
+
+        let tr =
+            Tau(IDC,IDS,MODE_SRC,ct,pkC2,pkS2,kid3,ctx)
+        in
+
+        let sig = sign(tr,sigSkC) in
+
+        event ClientSigned(
+            ct,
+            pkC2,
+            pkS2,
+            kid3,
+            ctx
+        );
+
+        let K =
+            Combine(
+                k1,
+                k2,
+                k3,
+                ctx
+            )
+        in
+
+        fin <-R finishedTag;
+
+        insert FinishedIssued(
+            tr,
+            K,
+            fin
+        );
+
+        event ClientConstructed(
+            ct,
+            pkC2,
+            pkS2,
+            kid3,
+            ctx,
+            K,
+            fin
+        );
+
+        return(
+            ct,
+            pkC2,
+            kid3,
+            ctx,
+            sig,
+            fin
+        ).
+
+(* ---------------- Server ---------------- *)
+
+let processS(
+    sigPkC:sigPkey,
+    rkKemS:kemKeyseed,
+    kid3:sourceid,
+    k3:sourceKey
+) =
+    OS1() :=
+        b <-R Z;
+        let pkS2 = exp(g,b) in
+        return(pkS2);
+
+        OS2(
+            ct:kemCiphertext,
+            pkC2:G,
+            kid:sourceid,
+            ctx:context,
+            sig:signature,
+            fin:finishedTag
+        ) :=
+            if kid = kid3 then
+                let tr =
+                    Tau(IDC,IDS,MODE_SRC,ct,pkC2,pkS2,kid,ctx)
+                in
+
+                if verify(tr,sigPkC,sig) then
+                    let k1S =
+                        kemDec(
+                            kemSk(rkKemS),
+                            ct
+                        )
+                    in
+
+                    let zS = exp(pkC2,b) in
+                    let k2S = dhK(zS) in
+
+                    let KS =
+                        Combine(
+                            k1S,
+                            k2S,
+                            k3,
+                            ctx
+                        )
+                    in
+
+                    get FinishedIssued(
+                        trStored,
+                        KStored,
+                        fStored
+                    )
+                    suchthat
+                        trStored = tr
+                        &&
+                        KStored = KS
+                        &&
+                        fStored = fin
+                    in
+                        event ServerAccepted(
+                            ct,
+                            pkC2,
+                            pkS2,
+                            kid,
+                            ctx,
+                            KS,
+                            fin
+                        );
+                        return()
+                    else
+                        return().
+
+(* ---------------- Replication ---------------- *)
+
+let processClients(
+    sigSkC:sigSkey,
+    pkKemS:kemPkey,
+    kid3:sourceid,
+    k3:sourceKey
+) =
+    foreach iC <= NC do
+        run processC(
+            sigSkC,
+            pkKemS,
+            kid3,
+            k3
+        ).
+
+let processServers(
+    sigPkC:sigPkey,
+    rkKemS:kemKeyseed,
+    kid3:sourceid,
+    k3:sourceKey
+) =
+    foreach iS <= NS do
+        run processS(
+            sigPkC,
+            rkKemS,
+            kid3,
+            k3
+        ).
+
+let processHDKEM(
+    sigSkC:sigSkey,
+    sigPkC:sigPkey,
+    pkKemS:kemPkey,
+    rkKemS:kemKeyseed,
+    kid3:sourceid,
+    k3:sourceKey
+) =
+    (
+        run processClients(
+            sigSkC,
+            pkKemS,
+            kid3,
+            k3
+        )
+      |
+        run processServers(
+            sigPkC,
+            rkKemS,
+            kid3,
+            k3
+        )
+    ).
+
+(* ---------------- Global setup ---------------- *)
+
+process
+    Ostart() :=
+        rkSigC <-R sigKeyseed;
+        let sigPkC = sigPkgen(rkSigC) in
+        let sigSkC = sigSkgen(rkSigC) in
+
+        rkKemS <-R kemKeyseed;
+        let pkKemS = kemPk(rkKemS) in
+
+        kid3 <-R sourceid;
+        k3 <-R sourceKey;
+
+        return(
+            sigPkC,
+            pkKemS,
+            kid3
+        );
+
+        run processHDKEM(
+            sigSkC,
+            sigPkC,
+            pkKemS,
+            rkKemS,
+            kid3,
+            k3
+        )

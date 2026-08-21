@@ -1,0 +1,236 @@
+(* ============================================================
+ * HDKEM source/QKD ideal-resource interface
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * Model the classical source interface consumed by HDKEM:
+ *
+ *       Source.GetWithID(kid3) -> k3
+ *
+ * after an external QKD/source analysis has established a shared
+ * secret value.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This is an IDEAL RESOURCE model. It does NOT prove:
+ *
+ *   - QKD physics;
+ *   - finite-key security;
+ *   - device assumptions;
+ *   - authentication of the physical QKD channel.
+ *
+ * It assumes:
+ *
+ *   - kid3 is public;
+ *   - k3 is sampled uniformly and remains secret;
+ *   - successful honest lookups refer to the provisioned pair.
+ *
+ * MODELING NOTE
+ * -------------
+ * The source key restriction created in Ostart is named k3.
+ *
+ * The client/server subprocess parameters deliberately use
+ * different names (k3C and k3S). Reusing the identifier k3 as
+ * several formal parameters causes CryptoVerif to treat the
+ * variable appearing in "query secret k3" as having several
+ * incompatible definitions.
+ * ============================================================ *)
+
+
+(* ============================================================
+ * Bounds
+ * ============================================================ *)
+
+param NC.
+param NS.
+
+
+(* ============================================================
+ * Types
+ * ============================================================ *)
+
+type sourceid  [large,fixed].
+type sourcekey [large,fixed].
+
+
+(* ============================================================
+ * Events
+ * ============================================================ *)
+
+event SourceProvisioned(
+    sourceid,
+    sourcekey
+).
+
+event ClientSource(
+    sourceid,
+    sourcekey
+).
+
+event ServerSource(
+    sourceid,
+    sourcekey
+).
+
+
+(* ============================================================
+ * Provenance correspondences
+ * ============================================================ *)
+
+query id:sourceid, k:sourcekey;
+
+    event(
+        ClientSource(
+            id,
+            k
+        )
+    )
+
+    ==>
+
+    event(
+        SourceProvisioned(
+            id,
+            k
+        )
+    ).
+
+
+query id:sourceid, k:sourcekey;
+
+    event(
+        ServerSource(
+            id,
+            k
+        )
+    )
+
+    ==>
+
+    event(
+        SourceProvisioned(
+            id,
+            k
+        )
+    ).
+
+
+(* ============================================================
+ * Source-key secrecy
+ *
+ * This query refers specifically to the unique restriction k3
+ * created in Ostart.
+ * ============================================================ *)
+
+query secret k3.
+
+
+(* ============================================================
+ * Client source lookup
+ *
+ * The adversary controls idC.
+ *
+ * A successful lookup occurs only when the supplied identifier
+ * equals the provisioned public source identifier kid3C.
+ *
+ * The source key itself is never returned.
+ * ============================================================ *)
+
+let processClientSource(
+    kid3C:sourceid,
+    k3C:sourcekey
+) =
+
+    foreach iC <= NC do
+
+    OCSource(
+        idC:sourceid
+    ) :=
+
+        if idC = kid3C then
+
+            event ClientSource(
+                kid3C,
+                k3C
+            );
+
+            return()
+
+        else
+
+            return().
+
+
+(* ============================================================
+ * Server source lookup
+ *
+ * The adversary independently controls idS.
+ *
+ * The server accepts the lookup only for the provisioned source
+ * identifier.
+ * ============================================================ *)
+
+let processServerSource(
+    kid3S:sourceid,
+    k3S:sourcekey
+) =
+
+    foreach iS <= NS do
+
+    OSSource(
+        idS:sourceid
+    ) :=
+
+        if idS = kid3S then
+
+            event ServerSource(
+                kid3S,
+                k3S
+            );
+
+            return()
+
+        else
+
+            return().
+
+
+(* ============================================================
+ * Main ideal-resource process
+ *
+ * kid3 is public.
+ * k3 is the unique secret source-key restriction targeted by the
+ * secrecy query.
+ * ============================================================ *)
+
+process
+
+    Ostart() :=
+
+        kid3 <-R sourceid;
+
+        k3 <-R sourcekey;
+
+        event SourceProvisioned(
+            kid3,
+            k3
+        );
+
+        return(
+            kid3
+        );
+
+        (
+            run processClientSource(
+                kid3,
+                k3
+            )
+
+          |
+
+            run processServerSource(
+                kid3,
+                k3
+            )
+        )

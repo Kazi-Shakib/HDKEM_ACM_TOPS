@@ -1,0 +1,128 @@
+(* ============================================================
+ * HDKEM authenticated NIKE/DH agreement component
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * Check authenticated functional agreement for the ephemeral
+ * DH/NIKE contribution with a genuine adversary-mediated boundary.
+ *
+ * The server chooses pkS2 and returns it through OS1. The client
+ * receives pkS2 as an oracle argument, chooses pkC2, computes its
+ * DH value, and signs the exact transcript (sid,pkC2,pkS2).
+ * The server receives pkC2 and sig through OS2, verifies the
+ * signature, and computes its DH value.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * This model proves only NON-INJECTIVE authenticated functional
+ * DH agreement under:
+ *
+ *   - the stated DH equations; and
+ *   - the UF-CMA signature abstraction.
+ *
+ * It does NOT prove:
+ *
+ *   - CDH/GDH hardness;
+ *   - pseudorandomness of the DH shared value;
+ *   - eCK secrecy;
+ *   - forward secrecy as a computational indistinguishability
+ *     statement.
+ *
+ * Those require a separate computational DH game/reduction.
+ * ============================================================ *)
+
+proof {
+    crypto uf_cma(sign) *;
+    success
+}
+
+param NC.
+param NS.
+
+type host [bounded].
+type sid [large,fixed].
+
+type keyseed [large,fixed].
+type pkey [bounded].
+type skey [bounded].
+type message [bounded].
+type signature [bounded].
+
+type Z [large,bounded].
+type G [large,bounded].
+
+const IDC:host.
+const IDS:host.
+
+const g:G.
+fun exp(G,Z):G.
+fun mult(Z,Z):Z.
+
+equation forall x:G,a:Z,b:Z;
+    exp(exp(x,a),b)=exp(x,mult(a,b)).
+
+equation builtin commut(mult).
+
+fun tauDH(host,host,sid,G,G):message [data].
+
+proba Psign.
+proba Psigncoll.
+
+expand UF_CMA_proba_signature(
+    keyseed,
+    pkey,
+    skey,
+    message,
+    signature,
+    skgen,
+    pkgen,
+    sign,
+    verify,
+    Psign,
+    Psigncoll
+).
+
+event ClientDH(sid,G,G,G).
+event ServerDH(sid,G,G,G).
+
+query s:sid, pc:G, ps:G, z:G;
+    event(ServerDH(s,pc,ps,z))
+    ==>
+    event(ClientDH(s,pc,ps,z)).
+
+let processC(skC:skey) =
+    foreach iC <= NC do
+    OC(s:sid, pkS2:G) :=
+        a <-R Z;
+        let pkC2 = exp(g,a) in
+        let zC = exp(pkS2,a) in
+        let sig = sign(tauDH(IDC,IDS,s,pkC2,pkS2),skC) in
+        event ClientDH(s,pkC2,pkS2,zC);
+        return(pkC2,sig).
+
+let processS(pkC:pkey) =
+    foreach iS <= NS do
+    OS1() :=
+        s <-R sid;
+        b <-R Z;
+        let pkS2 = exp(g,b) in
+        return(s,pkS2);
+
+        OS2(pkC2:G,sig:signature) :=
+            if verify(tauDH(IDC,IDS,s,pkC2,pkS2),pkC,sig) then
+            let zS = exp(pkC2,b) in
+            event ServerDH(s,pkC2,pkS2,zS);
+            return().
+
+process
+    Ostart() :=
+        rkC <-R keyseed;
+        let pkC = pkgen(rkC) in
+        let skC = skgen(rkC) in
+        return(pkC);
+        (
+            run processC(skC)
+          |
+            run processS(pkC)
+        )

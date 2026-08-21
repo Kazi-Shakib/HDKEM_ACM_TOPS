@@ -1,0 +1,111 @@
+(* ============================================================
+ * HDKEM NIKE/DH computational pseudorandomness assumption
+ * CryptoVerif ORACLE front-end
+ *
+ * PURPOSE
+ * -------
+ * State the protocol-level PRFODH/Gap-DH idealization used for
+ * the HDKEM DH contribution k2.
+ *
+ * Functional DH agreement is handled separately in
+ * hdkem_nike_key.ocv.
+ *
+ * This file captures the COMPUTATIONAL hop:
+ *
+ *     k2 = dhK(g^(ab))
+ *
+ *         ~
+ *
+ *     k2 = fresh random key
+ *
+ * while the public DH values g^a and g^b remain visible.
+ *
+ * SECURITY BOUNDARY
+ * -----------------
+ * The equivalence below is a primitive assumption suitable for a
+ * protocol proof. It does not prove Gap-DH from group internals.
+ *
+ * CryptoVerif's official distribution contains PRFODH/GDH case
+ * studies; for a paper-quality primitive proof, instantiate the
+ * distribution's compatible PRFODH/GDH library or discharge the
+ * assumption separately via CV2EC/EasyCrypt.
+ * ============================================================ *)
+
+param NDH.
+
+type Z [large,bounded].
+type G [large,bounded].
+type dhShared [large,fixed].
+
+const g:G.
+fun exp(G,Z):G.
+fun mult(Z,Z):Z.
+equation forall x:G,a:Z,b:Z;
+    exp(exp(x,a),b)=exp(x,mult(a,b)).
+equation builtin commut(mult).
+
+fun dhK(G):dhShared.
+
+proba P_PRFODH.
+
+equiv(
+    prfodh_honest(dhK)
+)
+    a <-R Z;
+    b <-R Z;
+
+    (
+        OPub() :=
+            return(
+                exp(g,a)
+            )
+
+      | OPubPeer() :=
+            return(
+                exp(g,b)
+            )
+
+      | foreach i <= NDH do
+        ODerive() :=
+            return(
+                dhK(
+                    exp(
+                        exp(g,b),
+                        a
+                    )
+                )
+            )
+    )
+
+<=(
+    P_PRFODH(
+        time,
+        NDH
+    )
+)=>
+
+    a <-R Z;
+    b <-R Z;
+    kIdeal <-R dhShared;
+
+    (
+        OPub() :=
+            return(
+                exp(g,a)
+            )
+
+      | OPubPeer() :=
+            return(
+                exp(g,b)
+            )
+
+      | foreach i <= NDH do
+        ODerive() :=
+            return(
+                kIdeal
+            )
+    ).
+
+process
+    Ostart() :=
+        return().
