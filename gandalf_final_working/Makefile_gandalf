@@ -1,0 +1,18 @@
+CC       = gcc
+CFLAGS   = -O2 -march=native -Wall -Wextra
+LIBOQS  ?= $(HOME)/liboqs-0.11.0
+FALCON   = $(LIBOQS)/src/sig/falcon/pqclean_falcon-512_clean
+SHIMS    = $(LIBOQS)/src/common/pqclean_shims
+INCS     = -I$(FALCON) -I$(SHIMS) -I$(LIBOQS)/include -I/usr/local/include -I.
+SRCS     = gandalf_final.c $(FALCON)/codec.c $(FALCON)/common.c $(FALCON)/fft.c \
+           $(FALCON)/fpr.c $(FALCON)/keygen.c $(FALCON)/rng.c \
+           $(FALCON)/sign.c $(FALCON)/vrfy.c $(FALCON)/pqclean.c
+LIBS     = -Wl,--whole-archive $(LIBOQS)/lib/liboqs-internal.a \
+           -Wl,--no-whole-archive -L/usr/local/lib -loqs -lsodium -lm \
+           -Wl,-rpath,/usr/local/lib
+gandalf_bench: $(SRCS) gandalf.h
+	$(CC) $(CFLAGS) $(INCS) $(SRCS) $(LIBS) -o $@
+bench: gandalf_bench
+	./gandalf_bench
+clean:
+	rm -f gandalf_bench
