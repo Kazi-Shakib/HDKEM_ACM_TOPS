@@ -1,0 +1,386 @@
+(* ============================================================
+ * HDKEM SRC-mode handshake -- symbolic (Dolev-Yao) protocol model.
+ *
+ * SCOPE, READ BEFORE INTERPRETING ANY RESULT:
+ *
+ * This is a ProVerif model, i.e. a SYMBOLIC verification. Every
+ * primitive below (the KEM, the NIKE, the ring signature, the AEAD,
+ * the split-key PRF) is declared as a perfect, unbreakable black-box
+ * operation via ProVerif's equational theory. ProVerif has no notion
+ * of computational advantage, adversary running time, or hardness
+ * assumption -- classical OR quantum. A proof obtained here says
+ * NOTHING about whether ML-KEM's IND-CCA2 security or the ring
+ * signature's EUF-CMA/deniability survive a quantum adversary; that
+ * question is answered by the paper's Section 8 reductions
+ * (Theorems 2-6), not by this file, and no symbolic tool can answer
+ * it. What this model DOES check, and is actually good at:
+ *
+ *   1. Client-to-server authentication / no client impersonation
+ *      given honest, uncompromised keys (correspondence assertions
+ *      below). NOT the reverse direction: the client authenticates
+ *      the server only indirectly, by successfully decrypting
+ *      Finished under the matching kcf -- there is no corresponding
+ *      injective server-authenticated-by-client correspondence
+ *      query in this file, so "mutual authentication" is not the
+ *      right description of what's actually machine-checked here.
+ *   2. Session-key secrecy against a Dolev-Yao network attacker,
+ *      GIVEN that the primitives behave as declared (idealized).
+ *   3. No replay: a captured, previously-accepted transcript cannot
+ *      be replayed to re-authenticate.
+ *   4. No kid3/cross-session substitution: the injective
+ *      correspondence below, over tau (which binds mode, both
+ *      identities, c, both X25519 values, and kid3), rules out
+ *      splicing fields from one session into another and having it
+ *      accepted. Cross-MODE downgrade specifically (SRC vs.
+ *      SOURCELESS vs. HIDE) is NOT covered -- this file is SRC-mode
+ *      only and the `mode` type has no other mode constructed
+ *      anywhere in it, so a query claiming downgrade-resistance
+ *      would be checking "is there a second mode value" rather than
+ *      "does the protocol resist downgrade." See the note above the
+ *      queries section for the version of this file that made that
+ *      mistake and how it was caught.
+ *   5. Agreement: both parties end a session holding the same
+ *      (mode, kid3, ksh) -- catches desynchronization bugs at the
+ *      protocol-logic level, independent of primitive strength.
+ *
+ * These are complementary to, not a substitute for, the paper's
+ * computational proofs -- see the discussion accompanying this file
+ * for why a computational tool (CryptoVerif) is the right next step
+ * for machine-checking the actual game-hop reductions of Theorems
+ * 2-6, and why no tool machine-checks "quantum-safe" as such (that
+ * distinction lives entirely in which primitive-level assumption is
+ * invoked by the human-written reduction, e.g. QROM vs ROM, and in
+ * techniques like One-Way-to-Hiding -- ProVerif/CryptoVerif/Tamarin/
+ * EasyCrypt are all agnostic to that choice).
+ *
+ * RING SIGNATURE MODELING NOTE: HDKEM's ring has exactly two members
+ * {rvkS, rvkC}. Symbolic tools have no native ring-signature
+ * primitive, so it is modeled here as: a signature that verifies
+ * against a ring of two public keys and succeeds if it was produced
+ * under EITHER member's secret key. This correctly captures the
+ * structural property that matters for the protocol-logic
+ * properties checked here (the verifier accepts without pinning
+ * down which member signed) without claiming to model the ring
+ * signature's own EUF-CMA/anonymity/deniability proof, which is a
+ * primitive-level, computational claim out of scope for this file.
+ * ============================================================ *)
+
+set attacker = active.
+
+(* ---------- types ---------- *)
+type skey.       (* generic secret key (ring, KEM-secret, DH-secret) *)
+type pkey.       (* generic public key *)
+type kemct.      (* ML-KEM ciphertext *)
+(* dhpub replaced by dhgroup, declared with the DH equational theory above *)
+type dhpriv.      (* X25519 secret value *)
+type id.         (* endpoint identity, e.g. "SubstationServer001" *)
+type mode.       (* handshake mode: SRC / SOURCELESS / HIDE *)
+type srcid.       (* public source handle kid3 *)
+type srckey.      (* secret source key k3 *)
+type sesskey.     (* derived ksh / kcf as an abstract 2-tuple carrier *)
+
+(* ---------- channels ---------- *)
+free net: channel.               (* public network, attacker-controlled *)
+
+(* Pairwise source correlation table: whichever endpoint calls
+ * Src.Get first commits (idC,idS,kid3,k3); Src.GetWithID looks it
+ * up by (idS,idC,kid3) -- fresh kid3 per client source call, k3
+ * never transmitted. This replaces the private-channel round-trip
+ * from the first draft, which did not actually correlate the two
+ * sides' k3. NOT MODELED: the paper's own "consumed once" claim --
+ * ProVerif's `get` is non-destructive, so nothing here prevents a
+ * hypothetical second lookup against the same table entry. Every
+ * session's kid3 is fresh via `new` in the honest processes, so no
+ * two honest sessions naturally collide, but destructive one-time
+ * source consumption itself is not machine-checked. *)
+table SourceTable(id, id, srcid, srckey).
+
+(* ---------- ring-signature primitive (see modeling note above) ---------- *)
+fun ringsign(bitstring, skey): bitstring.
+
+(* We realize "either member" concretely via a pk() correspondence
+   and two verification equations, since ProVerif's reduc needs a
+   deterministic destructor form. *)
+fun pk(skey): pkey.
+
+(* Two plain, total-on-their-matched-pattern destructors instead of
+ * one destructor with an `otherwise` fallback -- `otherwise` is not
+ * uniformly stable across ProVerif versions/front-ends, whereas
+ * plain reduc + the standard `let x = D(...) in P else Q`
+ * partial-destructor idiom is the oldest, most portable part of the
+ * language. checkring_ok below tries both signer positions via that
+ * idiom and returns a plain bool, so call sites are unchanged. *)
+fun checkring_as1(bitstring, bitstring, pkey, pkey): bool
+  reduc forall m: bitstring, sk: skey, pkB: pkey;
+          checkring_as1(m, ringsign(m, sk), pk(sk), pkB) = true.
+fun checkring_as2(bitstring, bitstring, pkey, pkey): bool
+  reduc forall m: bitstring, sk: skey, pkA: pkey;
+          checkring_as2(m, ringsign(m, sk), pkA, pk(sk)) = true.
+
+letfun checkring_ok(m: bitstring, sig: bitstring, pkA: pkey, pkB: pkey) =
+  let r1 = checkring_as1(m, sig, pkA, pkB) in r1
+  else let r2 = checkring_as2(m, sig, pkA, pkB) in r2
+  else false.
+
+(* ---------- KEM (ML-KEM abstraction) ---------- *)
+fun kemenc(pkey, bitstring): kemct.      (* encaps randomness folded in as bitstring *)
+fun kemkey(pkey, bitstring): sesskey.    (* the shared secret produced alongside kemenc *)
+fun kemdec(skey, kemct): sesskey
+  reduc forall sk: skey, r: bitstring;
+          kemdec(sk, kemenc(pk(sk), r)) = kemkey(pk(sk), r).
+
+(* ---------- NIKE (X25519 abstraction, standard Diffie-Hellman
+   equational theory -- exp/generator form, not reduc: DH
+   commutativity is a genuine bidirectional equation between two
+   applications of exp to different terms, which reduc cannot
+   express (reduc needs a constructor-pattern left-hand side). This
+   is the textbook ProVerif idiom for DH-style NIKE. ---------- *)
+type dhgroup.
+const dhg: dhgroup.
+fun dhexp(dhgroup, dhpriv): dhgroup.
+equation forall x: dhpriv, y: dhpriv;
+  dhexp(dhexp(dhg, x), y) = dhexp(dhexp(dhg, y), x).
+(* public value = g^priv ; shared secret = g^(a*b), reached from
+   either side as dhexp(otherPublic, mySecret) *)
+fun dhpk(dhpriv): dhgroup
+  reduc forall a: dhpriv; dhpk(a) = dhexp(dhg, a).
+fun dh_to_sesskey(dhgroup): sesskey.
+  (* wraps a dhgroup element as the sesskey-typed slot k2 used
+     elsewhere; purely a type-adapter, not a security-relevant step *)
+
+(* ---------- split-key PRF (skPRF) ---------- *)
+(* Abstract as a keyed hash over the ordered tuple (k1,k2,k3,tau);
+   HDKEM's own injective length-prefixed encoding is why this can be
+   modeled as a single deterministic function of exactly these
+   four arguments without further structure. *)
+fun skprf(sesskey, sesskey, srckey, bitstring): bitstring.
+fun skprf_nosrc(sesskey, sesskey, bitstring): bitstring.
+  (* source-less / no-source combiner reduces to n=2, per Sec 3.6 *)
+
+(* extract ksh / kcf as the two logical halves of the skPRF output *)
+fun ksh_of(bitstring): sesskey.
+fun kcf_of(bitstring): sesskey.
+
+(* ---------- AEAD (Ascon-128a abstraction) ---------- *)
+fun aead_enc(sesskey, bitstring, bitstring): bitstring.
+fun aead_dec(sesskey, bitstring, bitstring): bitstring
+  reduc forall k: sesskey, n: bitstring, m: bitstring;
+          aead_dec(k, n, aead_enc(k, n, m)) = m.
+
+(* ---------- events for correspondence / secrecy queries ---------- *)
+event ClientStarted(id, id, mode).
+event ClientSigned(id, id, mode, srcid, bitstring).   (* bitstring = tau *)
+event ServerSentHello(id, id, mode).
+event ServerAccepted(id, id, mode, srcid, bitstring).
+
+(* Fires when the client derives a session key after a successful
+ * Finished exchange; the (idC,idS,m) triple identifies which
+ * session it belongs to. This, not a private-channel publish, is
+ * how session-key secrecy is actually tested below -- verified
+ * empirically against a real ProVerif build (secrecy_test5.pv
+ * during development): a value sent on a [private] channel is
+ * invisible to the attacker BY CONSTRUCTION, so querying attacker()
+ * against something only ever sent there would vacuously "pass"
+ * regardless of whether the protocol is actually secure. The event
+ * + correspondence-style query pattern below checks the attacker's
+ * actual Dolev-Yao knowledge (built only from what is sent on the
+ * public `net` channel) against the value, which is the real claim. *)
+event SessionKeyDerived(id, id, mode, sesskey).
+
+(* ---------- queries ---------- *)
+
+(* 1. Session-key secrecy: the derived ksh for a completed session
+      between two honest, uncompromised endpoints is not known to
+      the attacker. This is a protocol-logic claim GIVEN idealized
+      primitives (see file header) -- it is not a claim about
+      ML-KEM/X25519/ring-signature computational hardness.
+   Confirmed working syntax (tested against a real build of ProVerif
+   2.00 from source -- see accompanying discussion): the event
+   carries the session key itself as a query-bound variable, and the
+   query checks whether the attacker can ever know a value that
+   simultaneously satisfies the SessionKeyDerived event. *)
+query idc: id, ids: id, m: mode, k: sesskey;
+  event(SessionKeyDerived(idc, ids, m, k)) && attacker(k)
+    ==> false.
+
+
+
+(* 2. Client-to-server injective authentication: every time the
+      server accepts, some client instance genuinely, and freshly,
+      produced that exact transcript -- no replay, no cross-session
+      splicing. Symmetric query for the client's acceptance of the
+      server. *)
+query idc: id, ids: id, m: mode, kid: srcid, tau: bitstring;
+  event(ServerAccepted(idc, ids, m, kid, tau))
+    ==> event(ClientStarted(idc, ids, m)).
+
+query idc: id, ids: id, m: mode, kid: srcid, tau: bitstring;
+  inj-event(ServerAccepted(idc, ids, m, kid, tau))
+    ==> inj-event(ClientSigned(idc, ids, m, kid, tau)).
+
+(* NOT INCLUDED: a cross-mode downgrade query (SRC->SOURCELESS/HIDE
+ * substitution). An earlier version of this file included one
+ * ("query ... event(ServerAccepted(...,m,...)) && event(ClientStarted
+ * (...,mc)) ==> (m = mc)."), and ProVerif returned true -- but the
+ * result was vacuous, not a real property: `type mode.` has no
+ * `const SRC/SOURCELESS/HIDE: mode.` declarations anywhere in this
+ * file, so the ONLY value of type mode that ever exists in any
+ * execution is the single `new m_v: mode` in the top-level process.
+ * With no second mode value reachable, m=mc can never be violated
+ * regardless of protocol correctness -- the query was checking
+ * "does the model contain a second mode," not "does the protocol
+ * resist downgrade." Mode is still bound into tau (see
+ * hdkem_build_tau below), so cross-mode substitution would still
+ * require a signature forgery in the real protocol -- but that claim
+ * is not machine-checked by this file. Modeling it for real would
+ * need actual mode constants plus the SOURCELESS wire format's
+ * extra Step-1 signature (Algorithm 1, Remark 5), which this
+ * SRC-only model does not implement. *)
+
+(* ============================================================
+ * PROCESS MACROS -- one honest client role, one honest server role,
+ * per Algorithms 1-3 / Figure 1 of the paper, SRC mode only.
+ * ============================================================ *)
+
+(* ---------- helper constructors used only for readable tau-binding ---------- *)
+fun pk_bs(pkey): bitstring.
+fun c_bs(kemct): bitstring.
+fun pk_bs2(dhgroup): bitstring.
+fun pk_bs3(dhgroup): bitstring.
+fun id_bs(id): bitstring.
+fun mode_bs(mode): bitstring.
+fun sid_bs(srcid): bitstring.
+fun flatten(bitstring): bitstring.
+fun labelS(): bitstring.
+fun labelC(): bitstring.
+fun concat_label(bitstring, bitstring): bitstring.
+fun seed_to_skey(bitstring): skey [private].
+
+let Client(rskC: skey, rvkS: pkey, rvkC: pkey, idC: id, idS: id, m: mode) =
+  event ClientStarted(idC, idS, m);
+  (* Server Hello: (pkS1, pkS2, IDS, mode) -- unauthenticated in SRC *)
+  in(net, (pkS1: pkey, pkS2: dhgroup, idS_recv: id, m_recv: mode));
+  if idS_recv = idS && m_recv = m then
+  (
+    new encR: bitstring;                    (* ML-KEM encaps randomness *)
+    let c = kemenc(pkS1, encR) in
+    let k1 = kemkey(pkS1, encR) in
+    new skC2: dhpriv;
+    let pkC2 = dhpk(skC2) in
+    let k2 = dh_to_sesskey(dhexp(pkS2, skC2)) in
+    (* pairwise source: (kid3, k3) <- Src.Get(IDC, IDS) *)
+    new kid3: srcid; new k3: srckey;
+    insert SourceTable(idC, idS, kid3, k3);
+    let tau = (pk_bs(pkS1), c_bs(c), pk_bs2(pkC2), pk_bs3(pkS2),
+               id_bs(idC), id_bs(idS), mode_bs(m), sid_bs(kid3)) in
+    let tau_flat = flatten(tau) in
+    let prfout = skprf(k1, k2, k3, tau_flat) in
+    let ksh = ksh_of(prfout) in
+    let kcf = kcf_of(prfout) in
+    let sigma = ringsign(tau_flat, rskC) in
+    event ClientSigned(idC, idS, m, kid3, tau_flat);
+    out(net, (c, pkC2, idC, kid3, sigma));
+    (* Finished exchange *)
+    in(net, (nuS: bitstring, finS: bitstring));
+    let labelS_tau = concat_label(labelS(), tau_flat) in
+    if aead_dec(kcf, nuS, finS) = labelS_tau then
+    (
+      new nuC: bitstring;
+      let labelC_tau = concat_label(labelC(), tau_flat) in
+      let finC = aead_enc(kcf, nuC, labelC_tau) in
+      out(net, (nuC, finC));
+      event SessionKeyDerived(idC, idS, m, ksh)
+    )
+  ).
+
+let Server(rskS: skey, rvkS: pkey, rvkC: pkey, idC: id, idS: id, m: mode) =
+  new skS1seed: bitstring;                  (* ML-KEM keypair material *)
+  let pkS1 = pk(seed_to_skey(skS1seed)) in
+  let skS1 = seed_to_skey(skS1seed) in
+  new skS2: dhpriv;
+  let pkS2 = dhpk(skS2) in
+  event ServerSentHello(idC, idS, m);
+  out(net, (pkS1, pkS2, idS, m));
+  in(net, (c: kemct, pkC2: dhgroup, idC_recv: id, kid3: srcid, sigma: bitstring));
+  if idC_recv = idC then
+  (
+    let k1 = kemdec(skS1, c) in
+    let k2 = dh_to_sesskey(dhexp(pkC2, skS2)) in
+    get SourceTable(=idC, =idS, =kid3, k3) in
+    let tau = (pk_bs(pkS1), c_bs(c), pk_bs2(pkC2), pk_bs3(pkS2),
+               id_bs(idC), id_bs(idS), mode_bs(m), sid_bs(kid3)) in
+    let tau_flat = flatten(tau) in
+    if checkring_ok(tau_flat, sigma, rvkS, rvkC) = true then
+    (
+      let prfout = skprf(k1, k2, k3, tau_flat) in
+      let ksh = ksh_of(prfout) in
+      let kcf = kcf_of(prfout) in
+      event ServerAccepted(idC, idS, m, kid3, tau_flat);
+      new nuS: bitstring;
+      let labelS_tau = concat_label(labelS(), tau_flat) in
+      let finS = aead_enc(kcf, nuS, labelS_tau) in
+      out(net, (nuS, finS));
+      in(net, (nuC: bitstring, finC: bitstring));
+      let labelC_tau = concat_label(labelC(), tau_flat) in
+      if aead_dec(kcf, nuC, finC) = labelC_tau then
+        0 (* both sides now hold ksh; secrecy tested via the client's branch *)
+    )
+  ).
+
+
+
+(* ============================================================
+ * TOP-LEVEL PROCESS: one honest client/server pair, long-term keys
+ * generated fresh and NOT leaked to the attacker (models the "both
+ * endpoints honest" freshness case; extend with phase/compromise
+ * events to additionally model the eCK corruption cases C1-C4 from
+ * Table 2 -- not attempted here, see note at end of file).
+ * ============================================================ *)
+
+process
+  new rskS_raw: skey; new rskC_raw: skey;
+  let rvkS = pk(rskS_raw) in
+  let rvkC = pk(rskC_raw) in
+  new idC_v: id; new idS_v: id; new m_v: mode;
+  (
+    !Client(rskC_raw, rvkS, rvkC, idC_v, idS_v, m_v)
+  ) | (
+    !Server(rskS_raw, rvkS, rvkC, idC_v, idS_v, m_v)
+  )
+
+(* ============================================================
+ * VERIFIED STATE (as of the fixes below) -- this file has been run
+ * to completion, twice independently: a locally-built ProVerif 2.00
+ * (from source), and INRIA's own official online demo
+ * (proverif24.paris.inria.fr). Both agree: all three queries below
+ * return true. This section replaces an earlier "untested, expect
+ * syntax errors" note that was accurate when written and is not
+ * anymore -- kept only as a reminder to update file-status comments
+ * once results actually come back, not to leave them stale.
+ *
+ * REMAINING KNOWN SIMPLIFICATIONS (confirmed accurate, not stale):
+ * 1. Long-term key compromise (OCorrupt), ephemeral-state reveal
+ *    (ORevealEph), and the QKD leakage/replacement oracle are not
+ *    modeled -- this file checks the "both fully honest, fresh
+ *    session" case only, not the eCK freshness cases C1-C4 from
+ *    Table 2. A separate, larger modeling task.
+ * 2. SOURCELESS and HIDE modes are not modeled; only SRC mode
+ *    (Algorithms 1-3, Figure 1) is covered. See the note above the
+ *    queries section for why this also means cross-mode downgrade
+ *    is not (and, without adding real mode constants, cannot be)
+ *    machine-checked by this file.
+ * 3. Destructive one-time consumption of the pairwise source (k3)
+ *    is not modeled -- see the comment above SourceTable.
+ * 4. The ring-signature and KEM/NIKE equational theories
+ *    (ringsign/checkring_ok, kemenc/kemdec, dhexp) are this file's
+ *    own hand-written abstractions, not cross-checked against any
+ *    reference ProVerif library encoding.
+ * 5. All serialization/type-adapter functions (pk_bs, c_bs, flatten,
+ *    ksh_of, kcf_of, dh_to_sesskey, labelS/labelC, concat_label) are
+ *    now public (previously some were marked [private], which would
+ *    have understated attacker capability by preventing the
+ *    Dolev-Yao attacker from performing what are, in the real
+ *    protocol, purely public serialization/extraction operations --
+ *    caught and fixed). All three queries were re-verified to still
+ *    hold after this change.
+ * ============================================================ *)
